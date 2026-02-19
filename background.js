@@ -67,7 +67,7 @@ const userProfile = {
       "roles": [
         {
           "title": "DevOps Lead / Associate DevOps Lead",
-          "start_date": "June 2026",
+          "start_date": "May 2023",
           "end_date": "Present"
         }
       ],

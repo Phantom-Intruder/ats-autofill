@@ -243,7 +243,55 @@ const Strategies = {
     return fields;
   },
 
-  // --- STRATEGY G: STANDARD ---
+  // --- STRATEGY H: iCIMS (Embeds & Iframes) ---
+  icims: function() {
+    const fields = [];
+    // Only run if it looks like iCIMS (common classes or iframe context)
+    // Note: window.location.hostname checking in iframe is useful
+    const isIcimsFrame = window.location.hostname.includes('icims.com');
+    const hasIcimsClasses = document.querySelector('.iCIMS_form_custom, .iCIMS_Logo, iframe[src*="icims"]');
+    
+    if (!isIcimsFrame && !hasIcimsClasses) return fields;
+
+    document.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(input => {
+        if (input.type === 'submit' || input.type === 'button') return;
+
+        let labelText = "";
+
+        // 1. iCIMS standard label by ID
+        if (input.id) {
+            const label = document.querySelector(`label[for="${input.id}"]`);
+            if (label) labelText = label.innerText;
+        }
+
+        // 2. Fallback to common iCIMS wrappers
+        if (!labelText) {
+            const wrapper = input.closest('.iCIMS_form_custom, .form-group, .iCIMS_Field, div');
+            if (wrapper) {
+                const label = wrapper.querySelector('label, .iCIMS_form_label');
+                if (label) labelText = label.innerText;
+            }
+        }
+
+        // 3. Last resort fallback
+        if (!labelText) labelText = input.getAttribute('aria-label') || input.placeholder || input.title || "";
+
+        if (cleanLabel(labelText)) {
+            fields.push({
+                id: input.id || input.name,
+                name: input.name,
+                type: input.tagName.toLowerCase(),
+                inputType: input.type,
+                label: cleanLabel(labelText),
+                options: input.tagName === 'SELECT' ? Array.from(input.options).map(o=>o.text) : [],
+                strategy: "icims"
+            });
+        }
+    });
+    return fields;
+  },
+
+  // --- STRATEGY G: STANDARD (Fallback) ---
   standard: function() {
     const fields = [];
     document.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(input => {
@@ -284,6 +332,7 @@ function scrapeForm() {
       Strategies.personio, 
       Strategies.sapSuccessFactors, 
       Strategies.taleoOracle, 
+      Strategies.icims, // Added iCIMS
       Strategies.standard
   ];
 
@@ -300,6 +349,9 @@ function scrapeForm() {
 
   return allFields;
 }
+
+// Explicitly attach to window for access by executeScript in popup.js
+window.scrapeForm = scrapeForm;
 
 // ============================================================================
 // 4. INJECTOR (The Hands)

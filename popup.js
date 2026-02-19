@@ -31,26 +31,49 @@ document.addEventListener('DOMContentLoaded', () => {
     // 1. Get current tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    // 2. Ask Content Script to Scrape
-    chrome.tabs.sendMessage(tab.id, { action: "scrape" }, (response) => {
-      // HANDLE SCRAPE ERRORS (e.g., Content Script not loaded)
+    // 2. Execute scrape across ALL frames (Top page + iframes like iCIMS)
+    // We assume content.js is already injected via manifest (all_frames: true)
+    // and has exposed window.scrapeForm.
+    chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: true },
+      func: () => typeof window.scrapeForm === "function" ? window.scrapeForm() : []
+    }, (injectionResults) => {
+      
       if (chrome.runtime.lastError) {
-        statusDiv.textContent = "Connection Failed: Refresh the job page and try again.";
+        statusDiv.textContent = "Connection Failed: Refresh page.";
         statusDiv.style.color = "red";
-        console.error("Scrape Error:", chrome.runtime.lastError.message);
+        console.error("Scripting Error:", chrome.runtime.lastError.message);
         return;
       }
 
-      if (!response || !response.fields) {
+      let allFields = [];
+      let targetFrameId = 0;
+
+      // Combine results from all frames and track which frame had the actual form
+      // If multiple frames have fields, we might just take the one with the most fields
+      // or concat them. For now, let's target the frame with the most fields.
+      let maxFieldsCount = 0;
+
+      for (const frame of injectionResults) {
+          if (frame.result && frame.result.length > 0) {
+              if (frame.result.length > maxFieldsCount) {
+                  maxFieldsCount = frame.result.length;
+                  targetFrameId = frame.frameId;
+                  allFields = frame.result; // Prioritize the frame with the most fields (likely the main form)
+              }
+          }
+      }
+
+      if (allFields.length === 0) {
         statusDiv.textContent = "Error: No fields found. Refresh page.";
         statusDiv.style.color = "red";
         return;
       }
 
-      statusDiv.textContent = `Found ${response.fields.length} fields. Asking Gemini...`;
+      statusDiv.textContent = `Found ${allFields.length} fields. Asking Gemini...`;
 
       // 3. Send to Background to Process
-      chrome.runtime.sendMessage({ action: "process_form", fields: response.fields }, (res) => {
+      chrome.runtime.sendMessage({ action: "process_form", fields: allFields }, (res) => {
         // HANDLE BACKGROUND ERRORS (e.g., Service Worker dead)
         if (chrome.runtime.lastError) {
             statusDiv.textContent = "API Error: Background service unreachable.";
@@ -65,10 +88,9 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           statusDiv.textContent = "Injecting answers...";
           
-          // 4. Send Answers back to Content Script
-          chrome.tabs.sendMessage(tab.id, { action: "fill", data: res.answers }, () => {
+          // 4. Send Answers specifically to the frame that contains the form
+          chrome.tabs.sendMessage(tab.id, { action: "fill", data: res.answers }, { frameId: targetFrameId }, () => {
              if (chrome.runtime.lastError) {
-                 // Usually innocuous if content script is busy, but good to log
                  console.error("Inject Warning:", chrome.runtime.lastError.message);
              }
              statusDiv.textContent = "Done! ✨ Check fields.";
