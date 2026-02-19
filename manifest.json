@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Job Auto-Filler",
+  "version": "1.1",
+  "description": "Uses Gemini AI to autofill job applications with your CV.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": ["https://generativelanguage.googleapis.com/*"],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["resume.pdf"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
