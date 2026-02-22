@@ -291,6 +291,58 @@ const Strategies = {
     return fields;
   },
 
+  // --- STRATEGY I: HR-ON ---
+  hron: function() {
+    const fields = [];
+    if (!document.querySelector('form[action*="hr-on.com"]') && !window.location.hostname.includes('hr-on.com')) return fields;
+
+    document.querySelectorAll('input:not([type="hidden"]), select, textarea').forEach(input => {
+        if (input.type === 'submit' || input.type === 'button') return;
+
+        let labelText = "";
+
+        // 1. HR-ON specific input row wrapper
+        const row = input.closest('.inputrow');
+        if (row) {
+            const labelSpan = row.querySelector('.label-text');
+            if (labelSpan) {
+                labelText = labelSpan.innerText;
+            } else {
+                const labelNode = row.querySelector('label');
+                if (labelNode) labelText = labelNode.innerText;
+            }
+        }
+
+        // 2. Checkbox or nested label (like Terms & Conditions)
+        if (!labelText) {
+            const labelWrapper = input.closest('label');
+            if (labelWrapper) {
+                labelText = labelWrapper.innerText;
+            }
+        }
+
+        // 3. Fallbacks
+        if (!labelText && input.id) {
+            const label = document.querySelector(`label[for="${input.id}"]`);
+            if (label) labelText = label.innerText;
+        }
+        if (!labelText) labelText = input.getAttribute('aria-label') || input.placeholder || "";
+
+        if (cleanLabel(labelText)) {
+            fields.push({
+                id: input.id || input.name,
+                name: input.name,
+                type: input.tagName.toLowerCase(),
+                inputType: input.type,
+                label: cleanLabel(labelText),
+                options: input.tagName === 'SELECT' ? Array.from(input.options).map(o=>o.text) : [],
+                strategy: "hron"
+            });
+        }
+    });
+    return fields;
+  },
+
   // --- STRATEGY G: STANDARD (Fallback) ---
   standard: function() {
     const fields = [];
@@ -333,6 +385,7 @@ function scrapeForm() {
       Strategies.sapSuccessFactors, 
       Strategies.taleoOracle, 
       Strategies.icims, // Added iCIMS
+      Strategies.hron, // Added HR-ON
       Strategies.standard
   ];
 
@@ -358,14 +411,24 @@ window.scrapeForm = scrapeForm;
 // ============================================================================
 
 function setReactNativeValue(element, value) {
-    const valueSetter = Object.getOwnPropertyDescriptor(element, 'value')?.set;
-    const prototypeValueSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set;
+    let valueSet = false;
+    
+    try {
+        const valueSetter = Object.getOwnPropertyDescriptor(element, 'value')?.set;
+        const prototypeValueSetter = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(element), 'value')?.set;
 
-    if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
-        prototypeValueSetter.call(element, value);
-    } else if (valueSetter) {
-        valueSetter.call(element, value);
-    } else {
+        if (prototypeValueSetter && valueSetter !== prototypeValueSetter) {
+            prototypeValueSetter.call(element, value);
+            valueSet = true;
+        } else if (valueSetter) {
+            valueSetter.call(element, value);
+            valueSet = true;
+        }
+    } catch (e) {
+        // Ignore descriptor errors, fallback to standard assignment
+    }
+
+    if (!valueSet) {
         element.value = value;
     }
     
@@ -386,23 +449,36 @@ function fillForm(answers) {
   }
 
   answers.forEach(async (answer) => { 
-    if (!answer.value || answer.value === "No Selection") return;
+    try {
+        if (!answer.value || answer.value === "No Selection" || answer.value === "") return;
 
-    // --- FIND ELEMENT ---
-    let el = document.getElementById(answer.id) || 
-             document.getElementsByName(answer.id)[0] || 
-             document.getElementsByName(answer.name)[0];
+        // --- FIND ELEMENT ---
+        let el = document.getElementById(answer.id);
+        
+        // If not found by ID or if the found element is hidden, try finding by name.
+        // Frameworks like Yii (jobbsys) use hidden inputs with the same name before checkboxes/file inputs.
+        if (!el || el.type === 'hidden') {
+            let nameToTry = answer.name || answer.id;
+            if (nameToTry) {
+                const elsByName = Array.from(document.getElementsByName(nameToTry));
+                el = elsByName.find(e => e.type !== 'hidden') || el;
+            }
+        }
 
-    if (!el && hasShadowDom) {
-        el = shadowInputs.find(i => (answer.id && i.id === answer.id) || (answer.name && i.name === answer.name));
-    }
+        // Fallback for Shadow DOM (SmartRecruiters)
+        if (!el && hasShadowDom) {
+            el = shadowInputs.find(i => (answer.id && i.id === answer.id) || (answer.name && i.name === answer.name));
+        }
 
-    if (el) {
-        console.log(`Filling ${answer.id} with ${answer.value}`);
-        el.style.backgroundColor = "#e8f0fe"; 
+        if (!el) return; // Skip if still not found
+
+        console.log(`Filling ${el.id || el.name} with ${answer.value}`);
+        
+        // Highlight element to show it was filled
+        if (el.style) el.style.backgroundColor = "#e8f0fe"; 
 
         if (el.type === 'file') {
-            const val = answer.value.toLowerCase();
+            const val = String(answer.value).toLowerCase();
             if (val.includes("resume") || val.includes("cv") || val.includes("curriculum")) {
                 await attachFile(el, "resume.pdf");
             } 
@@ -424,29 +500,66 @@ function fillForm(answers) {
                 setReactNativeValue(el, valueToSet);
             }
         } 
-        else if (el.type === 'checkbox' || el.type === 'radio') {
-             const isChecked = (String(answer.value).toLowerCase() === 'true' || String(answer.value).toLowerCase() === 'yes');
-             if (el.type === 'radio' && !isChecked) return;
+        else if (el.type === 'checkbox') {
+             const valStr = String(answer.value).toLowerCase();
+             // Match standard true/yes strings, OR if Gemini returned the checkbox's actual expected value
+             const isChecked = ['true', 'yes', '1', 'on'].includes(valStr) || valStr === String(el.value).toLowerCase();
              el.checked = isChecked;
              el.dispatchEvent(new Event('change', { bubbles: true }));
              el.dispatchEvent(new Event('click', { bubbles: true }));
         }
+        else if (el.type === 'radio') {
+             const radios = document.getElementsByName(el.name);
+             let checkTarget = null;
+             
+             // 1. Try to match by exact ID if Gemini provided it
+             if (answer.id) {
+                 const exactEl = document.getElementById(answer.id);
+                 if (exactEl && exactEl.type === 'radio') checkTarget = exactEl;
+             }
+             
+             // 2. Try to match by Value (e.g. Gemini returned "Male" to match value="male")
+             if (!checkTarget) {
+                 for (let r of radios) {
+                     if (String(r.value).toLowerCase() === String(answer.value).toLowerCase()) {
+                         checkTarget = r;
+                         break;
+                     }
+                 }
+             }
+             
+             // 3. Fallback: if Gemini just returned 'true'/'yes'
+             if (!checkTarget && ['true', 'yes', '1', 'on'].includes(String(answer.value).toLowerCase())) {
+                 checkTarget = el;
+             }
+
+             if (checkTarget) {
+                 checkTarget.checked = true;
+                 checkTarget.dispatchEvent(new Event('change', { bubbles: true }));
+                 checkTarget.dispatchEvent(new Event('click', { bubbles: true }));
+                 if (checkTarget.style) checkTarget.style.backgroundColor = "#e8f0fe"; 
+             }
+        }
         else {
             setReactNativeValue(el, answer.value);
         }
-    } 
-    else if (answer.type === "sap_picklist") {
-        const div = document.getElementById(answer.id);
-        if (div) {
-            div.click();
-            setTimeout(() => {
-                const input = div.querySelector('input[type="text"]');
-                if (input) {
-                    setReactNativeValue(input, answer.value);
-                    input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, keyCode: 13, key: 'Enter' }));
-                }
-            }, 100);
+        
+        // Handle specific SAP Picklists
+        if (answer.type === "sap_picklist") {
+            const div = document.getElementById(answer.id);
+            if (div) {
+                div.click();
+                setTimeout(() => {
+                    const input = div.querySelector('input[type="text"]');
+                    if (input) {
+                        setReactNativeValue(input, answer.value);
+                        input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, keyCode: 13, key: 'Enter' }));
+                    }
+                }, 100);
+            }
         }
+    } catch (err) {
+        console.error(`Error filling field ${answer.id || answer.name}:`, err);
     }
   });
 }

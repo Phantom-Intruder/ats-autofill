@@ -240,14 +240,27 @@ async function callGemini(formFields, apiKey) {
   try {
     console.log("Calling Gemini API with model: gemini-2.5-flash...");
 
-    // UPDATED URL: Using 'gemini-2.5-flash' based on your success with it
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     
     const response = await fetch(url, {
-      method: "POST", // CRITICAL: This was missing before!
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }]
+        contents: [{ parts: [{ text: prompt }] }],
+        // Force strict valid JSON array format
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                id: { type: "STRING" },
+                value: { type: "STRING" }
+              }
+            }
+          }
+        }
       })
     });
 
@@ -266,8 +279,17 @@ async function callGemini(formFields, apiKey) {
     let text = data.candidates[0].content.parts[0].text;
     console.log("Raw Gemini Response:", text); 
 
-    // Clean up markdown if Gemini adds it
-    text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    // Better extraction: Find the array bounds to safely extract JSON, 
+    // ignoring any conversational text or markdown artifacts
+    const firstBracket = text.indexOf('[');
+    const lastBracket = text.lastIndexOf(']');
+    
+    if (firstBracket !== -1 && lastBracket !== -1) {
+        text = text.substring(firstBracket, lastBracket + 1);
+    } else {
+        // Clean up markdown if Gemini adds it (Fallback)
+        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    }
     
     return JSON.parse(text);
 
